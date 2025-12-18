@@ -1,0 +1,164 @@
+---
+title: "Institution Trust and Technology Optimism"
+author: "Guo Zhan"
+date: "2025-12-17"
+output: pdf_document
+---
+
+```{r message = FALSE, include = FALSE}
+# load packages
+library(stargazer)
+library(ggplot2)
+library(dplyr)
+```
+
+```{r message = FALSE, include = FALSE}
+# data import
+data = readRDS("WVS_Cross-National_Wave_7_rds_v6_0.rds")
+```
+
+```{r message = FALSE, include = FALSE}
+# data cleaning
+library(haven)
+library(dplyr)
+
+# convert all to numeric for the ease of analysis
+data_numeric<- data %>%
+  mutate(across(everything(), ~ haven::zap_labels(.x)))
+
+# limit to China and US
+data_cleaned = filter(data_numeric, B_COUNTRY == 156 | B_COUNTRY == 840)
+
+# filter out No Answer/Refused
+table(data_cleaned$Q159)
+data_cleaned = filter(data_cleaned, Q159 != -2 & Q159 != -1)
+data_cleaned = filter(data_cleaned, Q66 > 0 & Q69 > 0 & Q70 > 0 & Q71 > 0 & Q72 > 0
+                       & Q75 > 0 & Q77 > 0 & Q78 > 0)
+
+# change the name of Q159
+data_cleaned$TechOptimism = data_cleaned$Q159
+
+# reverse coding for trust items, currently lower numbers mean higher trust
+data_cleaned$Q66 = 5 - data_cleaned$Q66
+data_cleaned$Q69 = 5 - data_cleaned$Q69
+data_cleaned$Q70 = 5 - data_cleaned$Q70
+data_cleaned$Q71 = 5 - data_cleaned$Q71
+data_cleaned$Q72 = 5 - data_cleaned$Q72
+data_cleaned$Q75 = 5 - data_cleaned$Q75
+data_cleaned$Q77 = 5 - data_cleaned$Q77
+data_cleaned$Q78 = 5 - data_cleaned$Q78
+
+# create a variable for institutional trust
+data_cleaned$InstTrust = (data_cleaned$Q66 + data_cleaned$Q69 + data_cleaned$Q70 +
+                            data_cleaned$Q71 + data_cleaned$Q72 + data_cleaned$Q75 +
+                            data_cleaned$Q77 + data_cleaned$Q78) / 8
+
+# create a dummy variable for China
+data_cleaned$China = ifelse(data_cleaned$B_COUNTRY == 156, 1, 0)
+
+# create a dummy variable for sex, female = 1, male = 0
+data_cleaned$Q260 = data_cleaned$Q260 - 1
+data_cleaned$Female = data_cleaned$Q260
+
+# education
+data_cleaned = filter(data_cleaned, Q275 >= 0)
+data_cleaned$Education = data_cleaned$Q275
+
+# income
+data_cleaned = filter(data_cleaned, Q288 >= 0)
+data_cleaned$Income = data_cleaned$Q288
+
+# age
+data_cleaned$Age = data_cleaned$Q262
+```
+
+```{r message = FALSE, include = FALSE}
+model_1 = lm(TechOptimism ~ InstTrust, data = data_cleaned)
+model_2 = lm(TechOptimism ~ InstTrust + China, data = data_cleaned)
+model_3 = lm(TechOptimism ~ InstTrust * China, data = data_cleaned)
+model_4 = lm(TechOptimism ~ InstTrust * China + Age + Female + Education + Income, data = data_cleaned)
+```
+
+#### Question
+
+Does higher trust in public and private institutions increase optimism that science and technology will create more opportunities for the next generation, and does this relationship differ between China and the United States?
+
+#### Summary
+
+Higher institutional trust is associated with greater optimism that science and technology will create opportunities for the next generation. This relationship is substantially stronger in China than in the United States, suggesting that trust in institutions plays a more central role in shaping technology optimism in state-led innovation systems.
+
+#### Background
+
+Public optimism about science and technology plays an important role in shaping support for innovation-driven growth, public investment in research, and the adoption of new technologies by organizations. Beliefs about whether technology will create opportunities for future generations influence how citizens evaluate technological change and the institutions that promote it. Prior research in strategy and organization theory suggests that such beliefs are closely tied to institutional environments, particularly the degree to which people trust governments, firms, and other major organizations responsible for developing and governing technology.
+
+China and the United States provide a useful comparison for studying this relationship. Both are global leaders in science and technology, yet they differ sharply in their institutional structures and trust landscapes. China’s innovation system is largely state-led, with high reported trust in government and public institutions embedded in national development narratives. The United States relies more heavily on market-driven innovation and private-sector leadership, but has experienced declining and fragmented trust in public institutions in recent decades. These differences suggest that institutional trust may play different roles in shaping technology optimism across the two countries.
+
+To examine this question, I use data from Wave 7 of the World Values Survey, a large, nationally representative survey that measures attitudes toward institutions, science, and social change. Technology optimism is measured using respondents’ agreement with the statement that science and technology will create more opportunities for the next generation. Institutional trust is captured through respondents’ confidence in a range of public and private institutions, including government, major companies, courts, universities, and international organizations.
+
+#### Methods
+
+I estimate a sequence of linear regression models using World Values Survey data for China and the United States. The dependent variable in all models is technology optimism, obtained from Q159 of the survey, ranging from 1 (completely disagree) to 10 (completely agree). The key independent variable is a unified institutional trust index, constructed by averaging respondents’ confidence in major public and private institutions (Q66: The press, Q69: The police, Q70: The courts, Q71: The government, Q72: Political parties, Q75: Universities, Q77: Major companies, Q78: Banks). The institutions are selected based on the criteria that respondents in both countries should have reasonable exposure to. For example, trust in churches (Q64) is not selected because I expect Chinese respondents to not have much experience with religious institutions. After reverse coding, the index ranges from 1 (not at all) to 4 (a great deal).
+
+I begin with a baseline model that relates technology optimism to institutional trust only:
+
+$TechOptimism_i = \beta_0 + \beta_1 InstTrust_i + \epsilon_i$
+
+Next, I add a country indicator for China (United States = 0) to account for differences in average levels of technology optimism between the two countries:
+
+$TechOptimism_i = \beta_0 + \beta_1 InstTrust_i + \beta_2China_i + \epsilon_i$
+
+The core model includes an interaction between institutional trust and the China indicator to test whether the relationship between trust and technology optimism differs between China and the United States:
+
+$TechOptimism_i = \beta_0 + \beta_1 InstTrust_i + \beta_2China_i + \beta_3InstTrust_i*China_i + \epsilon_i$
+
+Finally, I estimate a more fully specified model that adds standard demographic and socioeconomic controls—age, gender, education, and income—to assess whether the interaction between institutional trust and China is robust to observable differences across individuals:
+
+$TechOptimism_i = \beta_0 + \beta_1 InstTrust_i + \beta_2China_i + \beta_3InstTrust_i*China_i + \beta_4Age_i + \beta_5Female_i + \beta_6Education_i + \beta_7Income_i + \epsilon_i$
+
+In the interaction models, the coefficient on institutional trust represents the association between trust and technology optimism in the United States, while the interaction term captures how much stronger or weaker this association is in China.
+
+<center>
+
+```{r results='asis', echo = FALSE}
+stargazer(model_1, model_2, model_3, model_4, 
+          title = "OLS Regression Results",
+          digits = 2, # only show 2 digits in results
+          header = FALSE, # Suppresses a copyright note
+          # Display only n, R-squared, and std error of regression for fit stats
+          keep.stat = c("n", "rsq", "ser"))
+```
+
+#### Results
+
+Table 1 presents the results from four regression models examining the relationship between institutional trust and technology optimism in China and the United States. In the baseline model (Column 1), institutional trust is strongly and positively associated with technology optimism. A one-unit increase in the institutional trust index is associated with an increase of about $\beta = 1.08$ points in the technology optimism measure ($p < 0.01$), indicating a substantively large relationship between trust in major institutions and optimism that science and technology will create opportunities for the next generation.
+
+Column 2 adds a country indicator for China. The coefficient on institutional trust remains positive and statistically significant ($\beta = 0.54$, $p < 0.01$), although its magnitude decreases relative to the baseline model. At the same time, respondents in China report significantly higher technology optimism than respondents in the United States, with an estimated difference of $\beta = 0.98$ points ($p < 0.01$) holding institutional trust constant. This suggests that average optimism about technology is substantially higher in China than in the U.S., independent of individual-level trust.
+
+Column 3 introduces an interaction between institutional trust and the China indicator. In this specification, the coefficient on institutional trust ($\beta = 0.66$, $p < 0.01$) represents the association between trust and technology optimism in the United States. The interaction term between institutional trust and China is negative and statistically significant at the 10 percent level ($\beta = -0.23$, $p < 0.10$), indicating that the marginal effect of institutional trust on technology optimism is weaker in China than in the United States. While institutional trust remains positively associated with technology optimism in both countries, the estimated slope is flatter for Chinese respondents.
+
+Column 4 adds demographic and socioeconomic controls, including age, gender, education, and income. The main results remain broadly consistent. Institutional trust continues to exhibit a positive and statistically significant association with technology optimism ($\beta = 0.58$, $p < 0.01$), and respondents in China remain more optimistic on average than those in the United States ($\beta = 1.59$, $p < 0.01$). However, the interaction between institutional trust and China becomes statistically insignificant ($\beta = -0.16$), suggesting that part of the cross-country difference in the trust–optimism relationship may be explained by observable individual characteristics. Among the controls, age ($\beta = 0.01$, $p < 0.01$) and education ($\beta = 0.08$, $p < 0.01$) are positively associated with technology optimism, while gender ($\beta = 0.0004$) and income ($\beta = 0.01$) show no statistically significant relationship.
+
+Overall, the results indicate that institutional trust is a robust predictor of optimism about the future opportunities created by science and technology in both countries. At the same time, higher average technology optimism in China does not appear to be driven primarily by stronger individual-level trust effects, but rather by broader country-level differences.
+
+These results should be interpreted with caution for several reasons. First, the relationship between institutional trust and technology optimism may be subject to endogeneity: individuals who are generally optimistic about societal progress may develop higher trust in institutions that they perceive as drivers of technological advancement, rather than institutional trust causing optimism. Second, both institutional trust and technology optimism are measured using self-reported survey responses, which raises concerns about measurement error and social desirability bias, particularly in cross-national comparisons. In China, reported trust in institutions may be inflated due to political or social pressures, while in the United States, institutional skepticism may reflect broader political polarization rather than evaluations of innovation governance per se. Third, although the sample size is large overall, the interaction effect between institutional trust and country is estimated less precisely than the main effects, as reflected in its sensitivity to the inclusion of controls. This suggests limited statistical power to detect heterogeneous effects across countries, especially when individual characteristics are accounted for. Taken together, these limitations imply that the findings should be viewed as descriptive patterns rather than causal estimates.
+
+```{r echo = FALSE, message = FALSE}
+# visualization
+plot_data <- data_cleaned %>%
+  filter(!is.na(TechOptimism), !is.na(InstTrust), !is.na(China)) %>%
+  mutate(
+    country_group = ifelse(China == 1, "China", "United States")
+  )
+
+ggplot(plot_data, aes(x = InstTrust, y = TechOptimism)) +
+  geom_smooth(aes(linetype = country_group), method = "lm", se = FALSE) +
+  scale_x_continuous(breaks = 1:4, limits = c(1, 4)) +
+  labs(
+    x = "Institutional trust (1 = not at all, 4 = a great deal)",
+    y = "Technology optimism (Q159)",
+    linetype = "",
+    title = "Relationship between Institutional Trust and Technology Optimism"
+  ) +
+  theme_classic()
+
+```
