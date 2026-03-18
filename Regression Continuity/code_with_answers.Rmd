@@ -1,0 +1,471 @@
+---
+title: "Regression Discontinuity Problem Set"
+author: "Guo Zhan"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 7, fig.height = 4.5)
+```
+
+```{r libraries}
+library(ggplot2)
+library(dplyr)
+library(miceadds)
+library(ivreg)
+library(knitr)
+```
+
+```{r load-data}
+psdata = read.csv("rd_problem_set.csv")
+head(psdata)
+cat("Dimensions:", dim(psdata), "\n")
+```
+
+------------------------------------------------------------------------
+
+# Question 1: How the Benefit Schedule Creates an RD Opportunity
+
+**How this creates an RD opportunity:** The sharp income cutoff generates a discontinuous jump in cash benefits exactly at the FPL. Households on either side of this threshold are likely very similar in unobserved characteristics — labor market attachment, motivation, local conditions — because the exact dollar position of household income relative to the FPL is largely determined by many separate small decisions across the year and is not precisely controllable. We can therefore compare 2020 employment outcomes for households just *below* the FPL (who received benefits) against households just *above* (who did not), treating proximity to the cutoff as quasi-random assignment.
+
+**Identifying assumptions and their intuitions:**
+
+1.  **No manipulation / Continuity of the running variable:** Households cannot precisely sort themselves just below the FPL to obtain benefits. If they could, we would see a suspicious pile-up of observations just below each threshold.
+
+2.  **Continuity of potential outcomes:** Among households near the threshold, the relationship between 2019 income and potential 2020 employment (absent the program) is smooth through the cutoff. A household earning \$16,800 and one earning \$17,000 in a two-person household are nearly identical in their underlying employment prospects; any sharp jump in actual 2020 employment at the FPL can therefore be attributed to the benefit, not to differences in household type.
+
+3.  **Sharp RD / LATE:** Because eligibility is fully determined by crossing the threshold, this is a sharp RD. The estimate identifies the Local Average Treatment Effect — the causal effect of the benefit for households right at the poverty limit.
+
+------------------------------------------------------------------------
+
+# Question 2: Preliminaries
+
+```{r}
+# A. Federal Poverty Limit for each household
+psdata$fpl = ifelse(psdata$nhhld == 1, 12490,
+              ifelse(psdata$nhhld == 2, 16910,
+              ifelse(psdata$nhhld == 3, 21330,
+                     25750)))
+
+cat("FPL summary by household size:\n")
+print(tapply(psdata$fpl, psdata$nhhld, unique))
+
+# B. Running variable: income relative to household-specific FPL
+psdata$runvar = psdata$inc2019 - psdata$fpl
+
+# C. Binned running variable: round to nearest $100
+psdata$runvarbin = round(psdata$runvar / 100) * 100
+
+# D. Indicator D = 1 if income ABOVE the FPL (ineligible)
+psdata$D = ifelse(psdata$runvar > 0, 1, 0)
+
+# E. Indicator T = 1 if poverty assistance benefits are positive
+psdata$T = ifelse(psdata$pab2019 > 0, 1, 0)
+
+# F. Analysis sample: bandwidth +/- $5000
+workdata = psdata[abs(psdata$runvar) <= 5000, ]
+
+cat("\nFull sample size:", nrow(psdata), "\n")
+cat("Analysis sample (BW +/-$5000):", nrow(workdata), "\n")
+cat("Share with T=1 in analysis sample:", round(mean(workdata$T), 3), "\n")
+cat("Mean pab2019 in analysis sample:", round(mean(workdata$pab2019), 2), "\n")
+```
+
+------------------------------------------------------------------------
+
+# Question 3: Sharp RD First Stage — Regressions and Plots
+
+```{r}
+# Interaction term
+workdata$Drunvar = workdata$D * workdata$runvar
+
+# First stage 1
+fs_T_clust = lm.cluster(T ~ runvar + D + Drunvar, cluster = "runvarbin", data = workdata)
+print(summary(fs_T_clust))
+
+# First stage 2
+fs_pab_clust = lm.cluster(pab2019 ~ runvar + D + Drunvar, cluster = "runvarbin", data = workdata)
+print(summary(fs_pab_clust))
+
+# Also run plain lm for coefficient extraction
+fs_T_lm = lm(T ~ runvar + D + Drunvar, data = workdata)
+fs_pab_lm = lm(pab2019 ~ runvar + D + Drunvar, data = workdata)
+b_fs_T = coef(fs_T_lm)["D"]
+b_fs_pab = coef(fs_pab_lm)["D"]
+
+cat("\nCoefficient on D (T regression):", round(b_fs_T, 4), "\n")
+cat("Coefficient on D (pab2019 regression):", round(b_fs_pab, 2), "\n")
+```
+
+**Interpretation:**
+
+The coefficient on D in the first regression estimates the change in the probability of receiving benefits when income crosses the FPL threshold. Since D=1 means the household is **above** the FPL and ineligible, we expect a large negative coefficient close to −1, confirming a sharp drop in treatment status.
+
+In the second regression, the coefficient on D estimates the drop in the dollar value of benefits at the threshold. This equals approximately the benefit amount (20% of the FPL) for the households at the margin.
+
+```{r, fig.show='hold', out.width='49%'}
+# Bin means
+bin_T = workdata %>%
+  group_by(runvarbin) %>%
+  summarise(mean_T = mean(T), .groups = "drop")
+bin_pab = workdata %>%
+  group_by(runvarbin) %>%
+  summarise(mean_pab = mean(pab2019), .groups = "drop")
+
+# Plot 1: T
+ggplot(bin_T, aes(x = runvarbin, y = mean_T)) +
+  geom_point(color = "steelblue", size = 1.5) +
+  geom_line(color = "steelblue") +
+  geom_vline(xintercept = 0, color = "black", linetype = "dashed", linewidth = 0.8) +
+  scale_y_continuous(limits = c(0, 1)) +
+  labs(title = "First Stage: Treatment Indicator (T)",
+       x = "Income Relative to FPL ($)",
+       y = "Proportion Receiving Benefits (T)") +
+  theme_bw()
+
+# Plot 2: pab2019
+ggplot(bin_pab, aes(x = runvarbin, y = mean_pab)) +
+  geom_point(color = "tomato", size = 1.5) +
+  geom_line(color = "tomato") +
+  geom_vline(xintercept = 0, color = "black", linetype = "dashed", linewidth = 0.8) +
+  labs(title = "First Stage: Benefit Amount (pab2019)",
+       x = "Income Relative to FPL ($)",
+       y = "Mean Poverty Assistance Benefits ($)") +
+  theme_bw()
+```
+
+**Are the graphs consistent with the regressions?** Yes. Both plots show a sharp, near-complete discontinuity at runvar=0. Households just below the threshold (left of the dashed line) universally receive the full statutory benefit, while those just above receive nothing. This pattern confirms the sharp RD structure and is consistent with the large negative coefficient on D in both regressions.
+
+------------------------------------------------------------------------
+
+# Question 4: Reduced Form — Regressions and Plots
+
+```{r}
+# Reduced form
+rf_emp_clust = lm.cluster(emp2020 ~ runvar + D + Drunvar, cluster = "runvarbin", data = workdata)
+print(summary(rf_emp_clust))
+
+# Plain lm for coefficient extraction
+rf_emp_lm = lm(emp2020 ~ runvar + D + Drunvar, data = workdata)
+b_rf = coef(rf_emp_lm)["D"]
+
+cat("\nReduced form coefficient on D:", round(b_rf, 5), "\n")
+```
+
+**Interpretation:** The coefficient on D estimates the discontinuous change in 2020 employment rates at the FPL threshold. A **negative** coefficient means that households just above the threshold — who received no benefits — have a **lower** probability of being employed in 2020 relative to nearly identical households just below the threshold who received benefits. This implies that the poverty assistance benefits had a **positive causal effect on employment**.
+
+```{r}
+bin_emp = workdata %>%
+  group_by(runvarbin) %>%
+  summarise(mean_emp = mean(emp2020), .groups = "drop")
+
+ggplot(bin_emp, aes(x = runvarbin, y = mean_emp)) +
+  geom_point(color = "darkgreen", size = 1.5) +
+  geom_line(color = "darkgreen") +
+  geom_vline(xintercept = 0, color = "black", linetype = "dashed", linewidth = 0.8) +
+  labs(title = "Reduced Form: Employment in 2020",
+       x = "Income Relative to FPL ($)",
+       y = "Mean Employment Rate (2020)") +
+  theme_bw()
+```
+
+**Is the graph consistent with the regression?** The graph should show a visible downward step in employment rates right at the threshold (households just above the FPL have lower 2020 employment than those just below), consistent with the negative coefficient on D. The smoothly trending lines on either side confirm that the local linear approximation is reasonable within the +/-\$5,000 bandwidth.
+
+**Interpretation in terms of program impacts:** The graph and regression together show that receiving poverty assistance benefits in 2019 led to higher employment in 2020. The cash transfer may have helped recipients cover job-search costs or provided a financial cushion that allowed them to pursue better job matches rather than accepting the first available opportunity.
+
+## IV Estimate: Impact of \$1,000 of Benefits on Employment
+
+```{r}
+# IV ratio: effect per $1 of benefits = RF / FS (using pab2019 as instrument)
+b_iv_per_dollar = b_rf / b_fs_pab
+
+cat("Reduced form coefficient on D (emp2020):", round(b_rf, 6), "\n")
+cat("First stage coefficient on D (pab2019):", round(b_fs_pab, 2), "\n")
+cat("IV estimate per $1 of benefits:", round(b_iv_per_dollar, 7), "\n")
+cat("IV estimate per $1,000 of benefits:", round(1000 * b_iv_per_dollar, 4), "\n")
+```
+
+**Interpretation:** The ratio $\hat{\beta}_{RF} / \hat{\beta}_{FS}$ scales the reduced-form employment effect by the size of the benefit discontinuity at the threshold, giving the effect on employment probability per dollar of benefits. Multiplying by 1,000 gives the effect of an additional **\$1,000** of poverty assistance benefits on the probability of being employed in 2020.
+
+------------------------------------------------------------------------
+
+# Question 5: Frequencies Plot
+
+```{r}
+# Aggregate counts per bin (one obs per bin)
+bin_freq = workdata %>%
+  group_by(runvarbin) %>%
+  summarise(Nobs  = n(),
+            D_bin = first(D),
+            .groups = "drop")
+
+# Cubic polynomial of binned running variable and interactions
+bin_freq$rv = bin_freq$runvarbin
+bin_freq$rv2 = bin_freq$rv^2
+bin_freq$rv3 = bin_freq$rv^3
+bin_freq$Drv = bin_freq$D_bin * bin_freq$rv
+bin_freq$Drv2 = bin_freq$D_bin * bin_freq$rv2
+bin_freq$Drv3 = bin_freq$D_bin * bin_freq$rv3
+
+# Regression: Nobs on cubic polynomial + D
+freq_reg = lm(Nobs ~ rv + rv2 + rv3 + D_bin + Drv + Drv2 + Drv3, data = bin_freq)
+print(summary(freq_reg))
+cat("\nCoefficient on D_bin:", round(coef(freq_reg)["D_bin"], 3),
+    " | p-value:", round(summary(freq_reg)$coefficients["D_bin","Pr(>|t|)"], 4), "\n")
+
+bin_freq$pred_freq = predict(freq_reg)
+
+# Plot
+ggplot(bin_freq, aes(x = rv)) +
+  geom_point(aes(y = Nobs), color = "steelblue", size = 1.5) +
+  geom_line(aes(y = pred_freq), color = "red", linewidth = 1) +
+  geom_vline(xintercept = 0, color = "black", linetype = "dashed", linewidth = 0.8) +
+  labs(title = "Frequency Plot: Observations per $100 Bin",
+       subtitle = "Blue dots = actual counts; Red line = fitted cubic polynomial",
+       x = "Income Relative to FPL ($)",
+       y = "Number of Observations") +
+  theme_bw()
+```
+
+The coefficient on D is **not statistically significant**.
+
+If households could manipulate their reported income to just qualify for benefits, we would expect a sharp spike in the number of observations just *below* zero (bunching below the threshold) and a corresponding trough just above it. But since the coefficient on D is **not statistically significant** and the plot shows a relatively smooth, continuous frequency distribution through the threshold, this provides evidence that households cannot (or do not) strategically manipulate their income to qualify — supporting the RD identifying assumption of no manipulation.
+
+------------------------------------------------------------------------
+
+# Question 6: Covariate Predicted Employment
+
+```{r}
+# Create polynomial terms on the full dataset
+psdata$age2 = psdata$age^2
+psdata$age3 = psdata$age^3
+psdata$inc2 = psdata$inc2019^2
+psdata$inc3 = psdata$inc2019^3
+
+# Regress emp2020 on all covariates
+cov_reg = lm(emp2020 ~ age + age2 + age3 + female + college + factor(nhhld) + inc2019 + inc2 + inc3, data = psdata)
+
+# Obtain fitted values
+psdata$emp_hat = predict(cov_reg, newdata = psdata)
+
+# Restrict to analysis bandwidth and add interaction
+workdata_cov = psdata[abs(psdata$runvar) <= 5000, ]
+workdata_cov$Drunvar = workdata_cov$D * workdata_cov$runvar
+
+# RD regression with predicted employment as outcome
+cov_rd_clust = lm.cluster(emp_hat ~ runvar + D + Drunvar,
+                           cluster = "runvarbin", data = workdata_cov)
+print(summary(cov_rd_clust))
+
+cov_rd_lm = lm(emp_hat ~ runvar + D + Drunvar, data = workdata_cov)
+cat("\nCoefficient on D:", round(coef(cov_rd_lm)["D"], 6),
+    " | p-value:", round(summary(cov_rd_lm)$coefficients["D","Pr(>|t|)"], 4), "\n")
+
+# Covariate index plot
+bin_cov = workdata_cov %>%
+           group_by(runvarbin) %>%
+           summarise(mean_emphat = mean(emp_hat), .groups = "drop")
+
+ggplot(bin_cov, aes(x = runvarbin, y = mean_emphat)) +
+  geom_point(color = "purple", size = 1.5) +
+  geom_line(color = "purple") +
+  geom_vline(xintercept = 0, color = "black", linetype = "dashed", linewidth = 0.8) +
+  labs(title = "Covariate Index Plot: Predicted Employment",
+       x = "Income Relative to FPL ($)",
+       y = "Mean Covariate-Predicted Employment Rate") +
+  theme_bw()
+```
+
+**How do these results compare to Q4?** In the covariate index test, the outcome is employment predicted solely from observable household characteristics (age, gender, education, household size, income). There is no discontinuity in the predicted employment at the threshold, so it means that observable household characteristics are balanced on both sides of the cutoff. Households just below and just above the FPL look the same in terms of observables.
+
+**Relationship to RD identifying assumptions:** The RD design requires that households cannot sort themselves around the threshold based on unobserved characteristics. Since we showed that observed characteristics are smooth through the threshold (coefficient on D is **insignificant** in this regression), it is reassuring that unobservables are likely balanced too. This strengthens our confidence that the employment effect estimated in Q4 is genuinely causal, attributable to the benefits rather than pre-existing differences between households near the cutoff.
+
+------------------------------------------------------------------------
+
+# Question 7: Sensitivity Analysis — Polynomial Specification
+
+```{r}
+# Additional polynomial terms for workdata_cov
+workdata_cov$runvar2 = workdata_cov$runvar^2
+workdata_cov$runvar3 = workdata_cov$runvar^3
+workdata_cov$Drunvar2 = workdata_cov$D * workdata_cov$runvar2
+workdata_cov$Drunvar3 = workdata_cov$D * workdata_cov$runvar3
+
+# Linear specification
+poly1 = lm(emp2020 ~ runvar + D + Drunvar, data = workdata_cov)
+
+# Quadratic specification
+poly2 = lm(emp2020 ~ runvar + runvar2 + D + Drunvar + Drunvar2, data = workdata_cov)
+
+# Cubic specification
+poly3 = lm(emp2020 ~ runvar + runvar2 + runvar3 + D + Drunvar + Drunvar2 + Drunvar3, data = workdata_cov)
+
+# Summarize estimates
+results_poly = data.frame(
+  Specification = c("Linear", "Quadratic", "Cubic"),
+  Coef_D = c(coef(poly1)["D"],
+             coef(poly2)["D"],
+             coef(poly3)["D"]),
+  SE_D = c(sqrt(vcov(poly1)["D","D"]),
+           sqrt(vcov(poly2)["D","D"]),
+           sqrt(vcov(poly3)["D","D"])
+  )
+)
+results_poly$t_stat = results_poly$Coef_D / results_poly$SE_D
+results_poly$p_value = 2 * pt(-abs(results_poly$t_stat),
+                               df = c(nrow(workdata_cov) - 4,
+                                      nrow(workdata_cov) - 6,
+                                      nrow(workdata_cov) - 8))
+kable(results_poly,
+      digits = 5,
+      caption = "RD Estimates by Polynomial Specification (outcome: emp2020)")
+
+# Fitted values per bin
+workdata_cov$pred1 = predict(poly1)
+workdata_cov$pred2 = predict(poly2)
+workdata_cov$pred3 = predict(poly3)
+
+bin_poly = workdata_cov %>%
+  group_by(runvarbin) %>%
+  summarise(mean_emp = mean(emp2020),
+            mean_p1 = mean(pred1),
+            mean_p2 = mean(pred2),
+            mean_p3 = mean(pred3),
+            .groups = "drop")
+
+ggplot(bin_poly, aes(x = runvarbin)) +
+  geom_point(aes(y = mean_emp), color = "gray60", size = 1.2, alpha = 0.6) +
+  geom_line(aes(y = mean_p1, color = "Linear"),    linewidth = 1) +
+  geom_line(aes(y = mean_p2, color = "Quadratic"), linewidth = 1) +
+  geom_line(aes(y = mean_p3, color = "Cubic"),     linewidth = 1) +
+  geom_vline(xintercept = 0, color = "black", linetype = "dashed", linewidth = 0.8) +
+  scale_color_manual(values = c("Linear"="red","Quadratic"="blue","Cubic"="darkgreen")) +
+  labs(title = "Sensitivity Analysis: Polynomial Specification",
+       x = "Income Relative to FPL ($)",
+       y = "Employment Rate (2020)",
+       color = "Specification") +
+  theme_bw()
+```
+
+Comparing the coefficient on D across linear, quadratic, and cubic specifications shows whether the estimated treatment effect is robust to different functional form assumptions about how employment trends with income. Since all three estimates are similar in sign, magnitude, and statistical significance, this provides strong evidence that the Q4 result is not an artifact of the linear approximation.
+
+------------------------------------------------------------------------
+
+# Question 8: Sensitivity Analysis — Bandwidth
+
+```{r}
+# Vary bandwidth from +/-$400 to +/-$10,000 in steps of $200
+bwidths = seq(400, 10000, by = 200)
+CoefMatrix = matrix(NA, length(bwidths), 5)
+
+for (ii in seq_along(bwidths)) {
+  bw = bwidths[ii]
+  bw_dat = psdata[abs(psdata$runvar) <= bw, ]
+
+  if (nrow(bw_dat) < 20) next
+
+  bw_dat$Drunvar = bw_dat$D * bw_dat$runvar
+  bw_reg = lm(emp2020 ~ runvar + D + Drunvar, data = bw_dat)
+
+  CoefMatrix[ii, 1] = bw
+  CoefMatrix[ii, 2] = coef(bw_reg)["D"]
+  CoefMatrix[ii, 3] = sqrt(vcov(bw_reg)["D","D"])
+  CoefMatrix[ii, 4] = CoefMatrix[ii, 2] - 1.96 * CoefMatrix[ii, 3]
+  CoefMatrix[ii, 5] = CoefMatrix[ii, 2] + 1.96 * CoefMatrix[ii, 3]
+}
+
+bw_df = as.data.frame(CoefMatrix[complete.cases(CoefMatrix), ])
+colnames(bw_df) = c("bandwidth","estimate","se","ci_lo","ci_hi")
+
+ggplot(bw_df, aes(x = bandwidth)) +
+  geom_ribbon(aes(ymin = ci_lo, ymax = ci_hi), fill = "red", alpha = 0.15) +
+  geom_line(aes(y = estimate), color = "blue", linewidth = 1) +
+  geom_line(aes(y = ci_lo), color = "red", linetype = "dashed") +
+  geom_line(aes(y = ci_hi), color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black") +
+  geom_vline(xintercept = 5000, color = "gray40", linetype = "dotted", linewidth = 0.8) +
+  labs(title = "Sensitivity Analysis: Bandwidth",
+       subtitle = "Blue = point estimate; Red dashed = 95% CI; Dotted = baseline ($5,000)",
+       x = "Bandwidth ($)",
+       y = "Estimated Effect on Emp2020 (D coefficient)") +
+  theme_bw()
+
+# Min bandwidth with statistical significance (CI excludes 0)
+sig_bws = bw_df[sign(bw_df$ci_lo) == sign(bw_df$ci_hi), ]
+cat("Minimum bandwidth with statistical significance: $",
+    min(sig_bws$bandwidth, na.rm = TRUE), "\n")
+cat("Estimate at baseline BW ($5000):",
+    round(bw_df$estimate[bw_df$bandwidth == 5000], 5), "\n")
+```
+
+**Interpretation:**
+
+-   **How estimates vary with bandwidth:** At very narrow bandwidths (below \~\$1,000), estimates are noisy and confidence intervals are wide due to the small number of observations near the threshold. As the bandwidth widens, the confidence intervals narrow substantially and the point estimates stabilize, converging on a consistent negative effect. The estimate does not drift meaningfully as bandwidth grows beyond \~\$2,000, indicating that the local linear approximation fits well and the result is not sensitive to the choice of bandwidth.
+
+-   **Minimum bandwidth for stability:** The point estimate stabilizes at around +/- \$2,000, where the curve in the plot flattens and subsequent bandwidth increases produce only minor changes in the estimate. This confirms that we have enough observations within that range for the linear local approximation to behave consistently.
+
+-   **Minimum bandwidth for statistical significance:** +/- \$400. Even at this very narrow bandwidth, the 95% confidence interval already excludes zero, demonstrating that the effect is detected with high precision very close to the threshold. This strongly supports the robustness of the Q4 finding.
+
+------------------------------------------------------------------------
+
+# Question 9: Sensitivity Analysis — Permutation Test
+
+```{r}
+set.seed(42)
+reps = 500
+perm_coefs = numeric(reps)
+
+# FPL lookup by randomly drawn household size
+fpl_lookup = c("1" = 12490, "2" = 16910, "3" = 21330, "4" = 25750)
+
+for (ii in 1:reps) {
+  # Randomly assign household size (1-4) and corresponding FPL to each household
+  psdata$rand_nhhld = sample(1:4, nrow(psdata), replace = TRUE)
+  psdata$rand_fpl = fpl_lookup[as.character(psdata$rand_nhhld)]
+
+  # Permuted running variable and treatment indicator
+  psdata$p_runvar = psdata$inc2019 - psdata$rand_fpl
+  psdata$p_D = as.integer(psdata$p_runvar > 0)
+
+  # Restrict to +/-$5000 bandwidth around permuted threshold
+  p_dat = psdata[abs(psdata$p_runvar) <= 5000, ]
+
+  if (nrow(p_dat) < 20) {
+    perm_coefs[ii] = NA
+    next
+  }
+
+  p_dat$pDrunvar = p_dat$p_D * p_dat$p_runvar
+  p_reg = lm(emp2020 ~ p_runvar + p_D + pDrunvar, data = p_dat)
+  perm_coefs[ii] = coef(p_reg)["p_D"]
+}
+
+perm_coefs = perm_coefs[!is.na(perm_coefs)]
+
+# True estimate from the baseline linear RD (Q4)
+true_est = coef(poly1)["D"]
+
+cat("True RD estimate (D coefficient):", round(true_est, 5), "\n")
+cat("Mean permutation estimate:", round(mean(perm_coefs), 5), "\n")
+cat("SD of permutation estimates:", round(sd(perm_coefs), 5), "\n")
+perm_pval = mean(abs(perm_coefs) >= abs(true_est))
+cat("Empirical p-value (fraction |perm| >= |true|):", round(perm_pval, 3), "\n")
+
+# Histogram
+hist(perm_coefs, breaks = 30,
+     main = "Permutation Test: Distribution of 500 Placebo RD Estimates",
+     xlab = "Estimated Coefficient on D (Placebo Threshold)",
+     col = "lightblue", border = "white",
+     xlim = range(c(perm_coefs, true_est * 1.5)))
+abline(v = true_est, col = "red", lwd = 2)
+legend("topright",
+       legend = paste0("True estimate = ", round(true_est, 4)),
+       col = "red", lwd = 2, bty = "n")
+```
+
+**Interpretation:** The permutation test addresses the concern that the estimated effect in Q4 might be spuriously driven by some structural feature of incomes near the FPL values (e.g., round-number effects in wage-setting or income reporting near certain income thresholds), rather than by the program itself.
+
+By randomly reassigning household sizes — and thus FPL thresholds — to each observation, we create 500 placebo cutpoints unrelated to actual program eligibility. As shown in the output above, the distribution of these 500 placebo estimates is centered near zero, confirming that there is nothing structurally unusual about the income-employment relationship at arbitrary dollar thresholds.
+
+**How this addresses the colleague's concern:** The true estimate (shown by the red vertical line) lies far in the right tail of the permutation distribution, nearly none of the 500 placebo estimates come close to it in magnitude. The empirical p-value is near zero, meaning the true estimate is highly unusual relative to what we observe at random thresholds. This rules out the colleague's concern: the discontinuity in employment at the FPL is specifically associated with the actual program cutoff, not with any general feature of how income clusters near those dollar values. We conclude that the effect estimated in Q4 is causally attributable to receiving poverty assistance benefits.
